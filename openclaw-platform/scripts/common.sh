@@ -360,7 +360,10 @@ run_project_onboarding_once() {
   fi
 
   echo "Project '$project_name' is not initialized; running first-time onboarding..."
-  run_project_prestart_cli_checked "$project_name" onboard --mode local --no-install-daemon
+  # Run onboarding attached to the terminal so interactive prompts remain usable.
+  if ! run_project_prestart_cli "$project_name" onboard --mode local --no-install-daemon; then
+    fail "Onboarding failed for project '$project_name'."
+  fi
   : >"$marker_file"
 }
 
