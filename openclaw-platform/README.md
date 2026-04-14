@@ -62,6 +62,12 @@ openclaw-platform/
 ## 说明
 
 - `create-project.sh` 只创建目录与配置文件，不会自动启动容器
+- `start-project.sh` 在真正 `up` 之前会执行预启动流程：
+  - 自动执行权限修复（与官方 setup 一致，启动前执行 `chown`）
+  - 首次启动时自动执行一次 onboarding（后续启动自动跳过）
+  - 写入并同步 `gateway.mode=local` 与 `gateway.bind`
+  - 预启动任一步失败会直接停止，不会继续启动容器
+- 如果出现 `Missing config. Run openclaw setup...`，通常表示首次 onboarding 未成功完成；再次执行 `start` 会重新触发首次初始化
 - Gateway/Bridge 端口从 `18789` 开始按奇偶配对分配：
   - `gateway` 使用奇数端口（`18789`、`18791`、...）
   - `bridge` 使用 `gateway + 1`

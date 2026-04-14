@@ -184,4 +184,184 @@ run_project_compose() {
     "$@"
 }
 
+project_required_env_value() {
+  local project_name="$1"
+  local key="$2"
+  local env_file
+  env_file="$(project_env_file "$project_name")"
+  local value
+  value="$(read_env_value "$env_file" "$key" || true)"
+  if [[ -z "$value" ]]; then
+    fail "Missing $key in $(project_env_file "$project_name")"
+  fi
+  printf '%s' "$value"
+}
+
+project_config_dir() {
+  local project_name="$1"
+  project_required_env_value "$project_name" OPENCLAW_CONFIG_DIR
+}
+
+project_workspace_dir() {
+  local project_name="$1"
+  project_required_env_value "$project_name" OPENCLAW_WORKSPACE_DIR
+}
+
+ensure_project_data_dirs() {
+  local project_name="$1"
+  local config_dir
+  local workspace_dir
+  config_dir="$(project_config_dir "$project_name")"
+  workspace_dir="$(project_workspace_dir "$project_name")"
+
+  mkdir -p "$config_dir" "$workspace_dir"
+  mkdir -p "$config_dir/identity" "$config_dir/agents/main/agent" "$config_dir/agents/main/sessions"
+}
+
+run_project_prestart_gateway() {
+  local project_name="$1"
+  shift
+  run_project_compose "$project_name" run --rm --no-deps "$@"
+}
+
+fix_project_data_permissions() {
+  local project_name="$1"
+  run_project_prestart_gateway "$project_name" --user root --entrypoint sh openclaw-gateway -c \
+    'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+     [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+}
+
+run_project_prestart_cli() {
+  local project_name="$1"
+  shift
+  run_project_prestart_gateway "$project_name" --entrypoint node openclaw-gateway dist/index.js "$@"
+}
+
+run_project_prestart_cli_checked() {
+  local project_name="$1"
+  shift
+  local output
+  if ! output="$(run_project_prestart_cli "$project_name" "$@" 2>&1)"; then
+    fail "Prestart command failed for project '$project_name'.\nCommand: $*\n\n$output"
+  fi
+  if [[ -n "$output" ]]; then
+    printf '%s\n' "$output"
+  fi
+}
+
+project_is_initialized() {
+  local project_name="$1"
+  local config_file
+  config_file="$(project_config_dir "$project_name")/openclaw.json"
+  if [[ ! -f "$config_file" ]]; then
+    return 1
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$config_file" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    raise SystemExit(1)
+
+gateway = cfg.get("gateway")
+if not isinstance(gateway, dict):
+    raise SystemExit(1)
+
+mode = gateway.get("mode")
+if isinstance(mode, str) and mode.strip():
+    raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+    return $?
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    node - "$config_file" <<'NODE'
+const fs = require("node:fs");
+const configPath = process.argv[2];
+try {
+  const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const mode = cfg?.gateway?.mode;
+  process.exit(typeof mode === "string" && mode.trim().length > 0 ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+    return $?
+  fi
+
+  grep -q '"gateway"' "$config_file" && grep -q '"mode"' "$config_file"
+}
+
+project_onboarding_marker_file() {
+  local project_name="$1"
+  printf '%s/.onboarded' "$(project_config_dir "$project_name")"
+}
+
+run_project_onboarding_once() {
+  local project_name="$1"
+  local marker_file
+  marker_file="$(project_onboarding_marker_file "$project_name")"
+
+  if [[ -f "$marker_file" ]]; then
+    echo "Project '$project_name' is already onboarded; skipping onboarding."
+    return 0
+  fi
+
+  if project_is_initialized "$project_name"; then
+    echo "Project '$project_name' is already initialized; recording onboarding marker."
+    : >"$marker_file"
+    return 0
+  fi
+
+  echo "Project '$project_name' is not initialized; running first-time onboarding..."
+  run_project_prestart_cli_checked "$project_name" onboard --mode local --no-install-daemon
+  : >"$marker_file"
+}
+
+sync_project_gateway_config() {
+  local project_name="$1"
+  local gateway_bind
+  local gateway_port
+  local allowed_origin_json=""
+  local current_allowed_origins=""
+  local batch_json
+
+  gateway_bind="$(read_env_value "$(project_env_file "$project_name")" OPENCLAW_GATEWAY_BIND || true)"
+  gateway_bind="${gateway_bind:-lan}"
+  gateway_port="$(read_env_value "$(project_env_file "$project_name")" OPENCLAW_GATEWAY_PORT || true)"
+  gateway_port="${gateway_port:-18789}"
+
+  if [[ "$gateway_bind" != "loopback" ]]; then
+    allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$gateway_port" "$gateway_port")"
+    current_allowed_origins="$(run_project_prestart_cli "$project_name" config get gateway.controlUi.allowedOrigins 2>/dev/null || true)"
+    current_allowed_origins="${current_allowed_origins//$'\r'/}"
+  fi
+
+  batch_json="$(printf '[{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"%s"}' "$gateway_bind")"
+  if [[ -n "$allowed_origin_json" ]]; then
+    if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
+      echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
+    else
+      batch_json+=",{\"path\":\"gateway.controlUi.allowedOrigins\",\"value\":$allowed_origin_json}"
+    fi
+  fi
+  batch_json+="]"
+
+  run_project_prestart_cli_checked "$project_name" config set --batch-json "$batch_json" >/dev/null
+  echo "Pinned gateway.mode=local and gateway.bind=$gateway_bind for project '$project_name'."
+  if [[ -n "$allowed_origin_json" ]]; then
+    if [[ -z "$current_allowed_origins" || "$current_allowed_origins" == "null" || "$current_allowed_origins" == "[]" ]]; then
+      echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json"
+    fi
+  fi
+}
+
 
