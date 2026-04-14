@@ -17,6 +17,33 @@ require_cmd() {
   fi
 }
 
+is_debug_enabled() {
+  local raw="${OPENCLAW_PLATFORM_DEBUG:-}"
+  raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$raw" in
+    1 | true | yes | on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+debug_log() {
+  if is_debug_enabled; then
+    echo "[debug] $*" >&2
+  fi
+}
+
+debug_log_cmd() {
+  if ! is_debug_enabled; then
+    return 0
+  fi
+  local rendered=""
+  local arg
+  for arg in "$@"; do
+    printf -v rendered '%s %q' "$rendered" "$arg"
+  done
+  echo "[debug]${rendered}" >&2
+}
+
 validate_project_name() {
   local name="${1:-}"
   if [[ -z "$name" ]]; then
@@ -177,11 +204,15 @@ run_project_compose() {
   [[ -f "$env_file" ]] || fail "Missing env file: $env_file"
   [[ -f "$compose_file" ]] || fail "Missing compose file: $compose_file"
 
-  docker compose \
-    -p "$(compose_project_name "$project_name")" \
-    --env-file "$env_file" \
-    -f "$compose_file" \
+  local -a cmd=(
+    docker compose
+    -p "$(compose_project_name "$project_name")"
+    --env-file "$env_file"
+    -f "$compose_file"
     "$@"
+  )
+  debug_log_cmd "${cmd[@]}"
+  "${cmd[@]}"
 }
 
 project_required_env_value() {
@@ -221,6 +252,7 @@ ensure_project_data_dirs() {
 run_project_prestart_gateway() {
   local project_name="$1"
   shift
+  debug_log "Running prestart gateway command for project '$project_name'."
   run_project_compose "$project_name" run --rm --no-deps "$@"
 }
 
@@ -240,9 +272,15 @@ run_project_prestart_cli() {
 run_project_prestart_cli_checked() {
   local project_name="$1"
   shift
+  debug_log "Running prestart CLI command for project '$project_name': $*"
   local output
   if ! output="$(run_project_prestart_cli "$project_name" "$@" 2>&1)"; then
     fail "Prestart command failed for project '$project_name'.\nCommand: $*\n\n$output"
+  fi
+  if is_debug_enabled && [[ -n "$output" ]]; then
+    echo "[debug] prestart output begin" >&2
+    printf '%s\n' "$output" >&2
+    echo "[debug] prestart output end" >&2
   fi
   if [[ -n "$output" ]]; then
     printf '%s\n' "$output"

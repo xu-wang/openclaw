@@ -59,6 +59,14 @@ openclaw-platform/
 ./openclaw-platform/scripts/list-projects.sh
 ```
 
+启动排障时可以打开 debug：
+
+```bash
+./openclaw-platform/platform.sh start project-a --debug
+# 或
+OPENCLAW_PLATFORM_DEBUG=1 ./openclaw-platform/platform.sh start project-a
+```
+
 ## 说明
 
 - `create-project.sh` 只创建目录与配置文件，不会自动启动容器
@@ -67,6 +75,7 @@ openclaw-platform/
   - 首次启动时自动执行一次 onboarding（后续启动自动跳过）
   - 写入并同步 `gateway.mode=local` 与 `gateway.bind`
   - 预启动任一步失败会直接停止，不会继续启动容器
+- debug 模式会输出实际执行的 `docker compose` 与 prestart 命令，便于快速定位问题
 - 如果出现 `Missing config. Run openclaw setup...`，通常表示首次 onboarding 未成功完成；再次执行 `start` 会重新触发首次初始化
 - Gateway/Bridge 端口从 `18789` 开始按奇偶配对分配：
   - `gateway` 使用奇数端口（`18789`、`18791`、...）

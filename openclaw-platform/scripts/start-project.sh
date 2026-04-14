@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: start-project.sh <project-name>
+Usage: start-project.sh <project-name> [--debug]
 
 Starts openclaw-gateway for the specified project.
 EOF
@@ -21,6 +21,21 @@ fi
 PROJECT_NAME="${1:-}"
 validate_project_name "$PROJECT_NAME"
 require_cmd docker
+shift || true
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --debug)
+      export OPENCLAW_PLATFORM_DEBUG=1
+      ;;
+    *)
+      fail "Unknown option: $1"
+      ;;
+  esac
+  shift
+done
+
+debug_log "Debug mode enabled for project '$PROJECT_NAME'."
 
 ensure_project_data_dirs "$PROJECT_NAME"
 fix_project_data_permissions "$PROJECT_NAME"
