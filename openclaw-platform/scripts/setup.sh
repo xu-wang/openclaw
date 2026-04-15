@@ -2,17 +2,28 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$PROJECT_DIR/.env"
+
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  fail "Missing $ENV_FILE. Create the project first with openclaw-platform/create-project.sh."
+fi
+
+# shellcheck disable=SC1090
+set -a
+source "$ENV_FILE"
+set +a
+
 COMPOSE_FILE="$PROJECT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$PROJECT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
-
-fail() {
-  echo "ERROR: $*" >&2
-  exit 1
-}
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -66,24 +77,6 @@ try {
   // Keep docker-setup resilient when config parsing fails.
 }
 NODE
-  fi
-}
-
-read_env_gateway_token() {
-  local env_path="$1"
-  local line=""
-  local token=""
-  if [[ ! -f "$env_path" ]]; then
-    return 0
-  fi
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%$'\r'}"
-    if [[ "$line" == OPENCLAW_GATEWAY_TOKEN=* ]]; then
-      token="${line#OPENCLAW_GATEWAY_TOKEN=}"
-    fi
-  done <"$env_path"
-  if [[ -n "$token" ]]; then
-    printf '%s' "$token"
   fi
 }
 
@@ -235,11 +228,7 @@ if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
     OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
     echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
   else
-    DOTENV_GATEWAY_TOKEN="$(read_env_gateway_token "$PROJECT_DIR/.env" || true)"
-    if [[ -n "$DOTENV_GATEWAY_TOKEN" ]]; then
-      OPENCLAW_GATEWAY_TOKEN="$DOTENV_GATEWAY_TOKEN"
-      echo "Reusing gateway token from $PROJECT_DIR/.env"
-    elif command -v openssl >/dev/null 2>&1; then
+    if command -v openssl >/dev/null 2>&1; then
       OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
     else
       OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
@@ -339,59 +328,6 @@ COMPOSE_HINT="docker compose"
 for compose_file in "${COMPOSE_FILES[@]}"; do
   COMPOSE_HINT+=" -f ${compose_file}"
 done
-
-ENV_FILE="$PROJECT_DIR/.env"
-upsert_env() {
-  local file="$1"
-  shift
-  local -a keys=("$@")
-  local tmp
-  tmp="$(mktemp)"
-  # Use a delimited string instead of an associative array so the script
-  # works with Bash 3.2 (macOS default) which lacks `declare -A`.
-  local seen=" "
-
-  if [[ -f "$file" ]]; then
-    while IFS= read -r line || [[ -n "$line" ]]; do
-      local key="${line%%=*}"
-      local replaced=false
-      for k in "${keys[@]}"; do
-        if [[ "$key" == "$k" ]]; then
-          printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
-          seen="$seen$k "
-          replaced=true
-          break
-        fi
-      done
-      if [[ "$replaced" == false ]]; then
-        printf '%s\n' "$line" >>"$tmp"
-      fi
-    done <"$file"
-  fi
-
-  for k in "${keys[@]}"; do
-    if [[ "$seen" != *" $k "* ]]; then
-      printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
-    fi
-  done
-
-  mv "$tmp" "$file"
-}
-
-upsert_env "$ENV_FILE" \
-  OPENCLAW_CONFIG_DIR \
-  OPENCLAW_WORKSPACE_DIR \
-  OPENCLAW_GATEWAY_PORT \
-  OPENCLAW_BRIDGE_PORT \
-  OPENCLAW_GATEWAY_BIND \
-  OPENCLAW_GATEWAY_TOKEN \
-  OPENCLAW_IMAGE \
-  OPENCLAW_EXTRA_MOUNTS \
-  OPENCLAW_HOME_VOLUME \
-  OPENCLAW_DOCKER_APT_PACKAGES \
-  OPENCLAW_EXTENSIONS \
-  OPENCLAW_ALLOW_INSECURE_PRIVATE_WS \
-  OPENCLAW_TZ
 
 # Ensure bind-mounted data directories are writable by the container's `node`
 # user (uid 1000). Host-created dirs inherit the host user's uid which may
