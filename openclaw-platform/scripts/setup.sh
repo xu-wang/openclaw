@@ -1,9 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
-EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+find_repo_root() {
+  local dir="$PROJECT_DIR"
+  while [[ "$dir" != "/" ]]; do
+    if [[ -f "$dir/package.json" && -f "$dir/Dockerfile" && -d "$dir/openclaw-platform" ]]; then
+      printf '%s' "$dir"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+
+  echo "ERROR: Could not locate repo root from $PROJECT_DIR" >&2
+  exit 1
+}
+
+REPO_ROOT="$(find_repo_root)"
+COMPOSE_FILE="$PROJECT_DIR/docker-compose.yml"
+EXTRA_COMPOSE_FILE="$PROJECT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
@@ -298,10 +314,10 @@ if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
     OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
     echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
   else
-    DOTENV_GATEWAY_TOKEN="$(read_env_gateway_token "$ROOT_DIR/.env" || true)"
+    DOTENV_GATEWAY_TOKEN="$(read_env_gateway_token "$PROJECT_DIR/.env" || true)"
     if [[ -n "$DOTENV_GATEWAY_TOKEN" ]]; then
       OPENCLAW_GATEWAY_TOKEN="$DOTENV_GATEWAY_TOKEN"
-      echo "Reusing gateway token from $ROOT_DIR/.env"
+      echo "Reusing gateway token from $PROJECT_DIR/.env"
     elif command -v openssl >/dev/null 2>&1; then
       OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
     else
@@ -414,7 +430,7 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
   COMPOSE_HINT+=" -f ${compose_file}"
 done
 
-ENV_FILE="$ROOT_DIR/.env"
+ENV_FILE="$PROJECT_DIR/.env"
 upsert_env() {
   local file="$1"
   shift
@@ -478,8 +494,8 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
     -t "$IMAGE_NAME" \
-    -f "$ROOT_DIR/Dockerfile" \
-    "$ROOT_DIR"
+    -f "$REPO_ROOT/Dockerfile" \
+    "$REPO_ROOT"
 else
   echo "==> Pulling Docker image: $IMAGE_NAME"
   if ! docker pull "$IMAGE_NAME"; then
@@ -539,14 +555,14 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   echo "==> Sandbox setup"
 
   # Build sandbox image if Dockerfile.sandbox exists.
-  if [[ -f "$ROOT_DIR/Dockerfile.sandbox" ]]; then
+  if [[ -f "$REPO_ROOT/Dockerfile.sandbox" ]]; then
     echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
     run_docker_build \
       -t "openclaw-sandbox:bookworm-slim" \
-      -f "$ROOT_DIR/Dockerfile.sandbox" \
-      "$ROOT_DIR"
+      -f "$REPO_ROOT/Dockerfile.sandbox" \
+      "$REPO_ROOT"
   else
-    echo "WARNING: Dockerfile.sandbox not found in $ROOT_DIR" >&2
+    echo "WARNING: Dockerfile.sandbox not found in $REPO_ROOT" >&2
     echo "  Sandbox config will be applied but no sandbox image will be built." >&2
     echo "  Agent exec may fail if the configured sandbox image does not exist." >&2
   fi
@@ -568,7 +584,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   # created only after sandbox prerequisites pass, so the socket is never
   # exposed when sandbox cannot actually run.
   if [[ -S "$DOCKER_SOCKET_PATH" ]]; then
-    SANDBOX_COMPOSE_FILE="$ROOT_DIR/docker-compose.sandbox.yml"
+    SANDBOX_COMPOSE_FILE="$PROJECT_DIR/docker-compose.sandbox.yml"
     cat >"$SANDBOX_COMPOSE_FILE" <<YAML
 services:
   openclaw-gateway:
@@ -637,8 +653,8 @@ else
     config set agents.defaults.sandbox.mode "off" >/dev/null; then
     echo "WARNING: Failed to reset agents.defaults.sandbox.mode to off" >&2
   fi
-  if [[ -f "$ROOT_DIR/docker-compose.sandbox.yml" ]]; then
-    rm -f "$ROOT_DIR/docker-compose.sandbox.yml"
+  if [[ -f "$PROJECT_DIR/docker-compose.sandbox.yml" ]]; then
+    rm -f "$PROJECT_DIR/docker-compose.sandbox.yml"
   fi
 fi
 
